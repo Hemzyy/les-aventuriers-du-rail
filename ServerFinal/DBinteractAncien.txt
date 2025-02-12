@@ -1,0 +1,94 @@
+using System;
+using MySql.Data.MySqlClient;
+
+public class DBInteract
+{
+    private MySqlConnectionStringBuilder stringBuilder;
+    private MySqlConnection connection;
+
+    public DBInteract()
+    {
+        stringBuilder = new MySqlConnectionStringBuilder
+        {
+            Server = "192.168.100.102",
+            Database = "LesAventuriersDuRail",
+            UserID = "ghait",
+            Password = "mdpDeOuf_2024"
+        };
+        connection = new MySqlConnection(stringBuilder.ConnectionString);
+    }
+    public void Start()
+    {
+        try
+        {
+            connection.Open();
+            Console.WriteLine("Database connection successfully established.");
+        }
+        catch (MySqlException ex)
+        {
+            Console.WriteLine($"MySQL Error: {ex.Message}, Error Code: {ex.Number}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("General error when connecting to the database: " + ex.Message);
+        }
+    }
+
+    public bool InsertPlayer(string pseudo, string motDePass)
+    {
+        bool result = false;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "INSERT INTO Joueur (pseudo, motDePass) VALUES (@pseudo, @motDePass)";
+            command.Parameters.AddWithValue("@pseudo", pseudo);
+            command.Parameters.AddWithValue("@motDePass", motDePass);
+
+            try
+            {
+                command.ExecuteNonQuery();
+                result = true;
+                Console.WriteLine("ok: " );
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Could not add the player: " + ex.Message);
+            }
+        }
+        return result;
+    }
+
+    public bool Login(string pseudo, string motDePass)
+    {
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT * FROM Joueur WHERE pseudo = @pseudo AND motDePass = @motDePass";
+            command.Parameters.AddWithValue("@pseudo", pseudo);
+            command.Parameters.AddWithValue("@motDePass", motDePass);
+
+            using (var reader = command.ExecuteReader())
+            {
+                if (reader.HasRows)
+                {
+                    Console.WriteLine("Username and password are correct");
+                    return true;
+                }
+                else
+                {
+                    Console.WriteLine("Username or password incorrect");
+                    return false;
+                }
+            }
+        }
+    }
+
+    public void CloseConnection()
+    {
+        if (connection != null)
+        {
+            connection.Close();
+            Console.WriteLine("Database connection closed.");
+        }
+    }
+}
+

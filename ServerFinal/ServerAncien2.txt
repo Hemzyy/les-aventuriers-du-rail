@@ -1,0 +1,624 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using System.Threading;
+using MySqlX.XDevAPI;
+using serverPackage;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
+
+public class Server
+{
+    public int port = 10005;
+    private List<ServerClient> clients;
+    private List<ServerClient> disconnectList;
+
+    private Thread updateThread;
+    //le serveur en lui meme
+    private TcpListener server;
+    private bool serverStarted;
+    public int ClientId = 0;
+
+
+    //ici pour faire mes test lobby 
+    private List<Lobby> lobbysList;
+    private int IdLobby = 1;
+    private int IndexList = 0;
+
+    private MethodesRafik Methodes;
+    //lance le server
+
+    //ici on déclare
+
+    public ListeArcs map;
+    public List<Noeud> villes;
+
+    JeuServeur jeuUn;
+    Joueur joueurTest;
+
+    List<Joueur> listeJoueurs = new List<Joueur>(4);  // Ici je créé un liste qui conditent 4 joueurs
+
+    public GestionnairePioche pileManager;
+
+
+    /// <summary>
+    /// //////////////
+    /// </summary>
+    public void Init()
+    {
+        //a ajouter lors de la liaison avec unity pour pouvoir changer de scence
+        //DontDestroyOnLoad(gameObject);
+
+        clients = new List<ServerClient>();
+        disconnectList = new List<ServerClient>();
+
+        //section lobby 
+        lobbysList = new List<Lobby>();
+        Methodes = new MethodesRafik();
+        //fin section lobby
+
+        pileManager = new GestionnairePioche();
+
+
+
+        try
+        {
+            //voir qui accepter puis start le server
+            server = new TcpListener(IPAddress.Any, port);
+            server.Start();
+            startLinstening();
+            serverStarted = true;
+        }
+        catch (Exception e)
+        {
+            Debug.WriteLine("Socket error: " + e.Message);
+        }
+
+        map = ListeArcs.createMap(ListeArcs.GetRails());
+        villes = Foret.getVilles();
+
+
+        jeuUn = new JeuServeur(map, villes);
+
+        //j'ajoute ici les joueurs.
+
+        Joueur joueur1 = new Joueur("Joueur1", 1, 0, pileManager);
+        Joueur joueur2 = new Joueur("Joueur2", 2, 1, pileManager);
+        Joueur joueur3 = new Joueur("Joueur3", 3, 2, pileManager);
+        Joueur joueur4 = new Joueur("Joueur4", 4, 3, pileManager);
+
+        // Ajout des joueurs à la liste
+        listeJoueurs.Add(joueur1);
+        listeJoueurs.Add(joueur2);
+        listeJoueurs.Add(joueur3);
+        listeJoueurs.Add(joueur4);
+
+
+    }
+
+    public void StartUpdateThread()
+    {
+        updateThread = new Thread(Update);
+        updateThread.IsBackground = true; // defini en arriere plan de tel sort qu'il se termine lorsque le programme principale s'arrete
+        updateThread.Start();
+    }
+
+    public void StopUpdateThread()
+    {
+        //on verifie deja si le thread est bel est bien existant avant dd'essayer de l'arreter
+        if (updateThread != null && updateThread.IsAlive)
+        {
+            updateThread.Abort();
+        }
+    }
+
+    public void Update()
+    {
+        if (!serverStarted)
+        {
+            Console.WriteLine("Server not Started.");
+            return;
+        }
+
+        while (serverStarted)
+        {
+            for (int i = 0; i < clients.Count; i++)
+            {
+                //verifie si le client est encore connecter ?
+                if (clients[i] != null && clients[i].tcp != null)
+                {
+                    if (!IsConnected(clients[i].tcp))
+                    {
+                        clients[i].tcp.Close();
+                        disconnectList.Add(clients[i]);
+                        continue;
+                    }
+
+                    NetworkStream s = clients[i].tcp.GetStream();
+                    if (s.DataAvailable)
+                    {
+                        StreamReader reader = new StreamReader(s, true);
+                        string jsonData = reader.ReadLine(); // Lecture de la chaîne JSON directement depuis le flux
+
+
+                        if (!string.IsNullOrEmpty(jsonData))
+                        {
+                            // Traiter les paquets venant des clients
+                            handleData(jsonData, clients, i);
+                        }
+                    }
+                }
+            }
+
+            //une boucle pour deconnecter les clients
+            for (int i = disconnectList.Count - 1; i >= 0; i--)
+            {
+                Console.WriteLine("client id: (" + disconnectList[i].ClientiD + ") deconnecter.");
+                clients.Remove(disconnectList[i]);
+                disconnectList.RemoveAt(i);
+            }
+        }
+    }
+
+
+    //fonction qui commence a recevoir les demandes de connections et les accetper
+    private void startLinstening()
+    {
+        server.BeginAcceptTcpClient(AcceptTcpClient, server);
+    }
+
+    //accepte le client et l'ajoute a la liste des clients  
+    private void AcceptTcpClient(IAsyncResult ar)
+    {
+        //pour nous rappeler de qui sais
+        TcpListener listener = (TcpListener)ar.AsyncState;
+
+        ServerClient sc = new ServerClient(listener.EndAcceptTcpClient(ar), ClientId);
+        Console.WriteLine("Un nouveau client s'est connecté.");
+        clients.Add(sc);
+        this.ClientId++;
+        // apres que le server accepte un nouveau client il oublie de se remettre a ecouter don on rappel startlistening
+        startLinstening();
+    }
+
+    //fonction pour savoir si le client est connecter 
+    private bool IsConnected(TcpClient c)
+    {
+        if (c?.Client == null || !c.Client.Connected)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (c.Client.Poll(0, SelectMode.SelectRead))
+            {
+                return c.Client.Receive(new byte[1], SocketFlags.Peek) != 0;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+
+    //new broadcast takes a PaquetMessage object as parameter
+    public void Broadcast(PaquetMessage data, List<ServerClient> lsc)
+    {
+        try
+        {
+            foreach (ServerClient sc in lsc)
+            {
+                try
+                {
+                    if (sc.tcp != null && IsConnected(sc.tcp))
+                    {
+                        string jsonString = JsonSerializer.Serialize(data);
+                        NetworkStream stream = sc.tcp.GetStream();
+                        StreamWriter writer = new StreamWriter(stream);
+                        writer.WriteLine(jsonString); // Écriture de la chaîne JSON directement dans le flux
+                        writer.Flush();
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.WriteLine(e);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.WriteLine(e);
+        }
+    }
+
+    public void Unicast(PaquetMessage data, ServerClient client)
+    {
+        try
+        {
+            if (client.tcp != null && IsConnected(client.tcp))
+            {
+                try
+                {
+                    string jsonString = JsonSerializer.Serialize(data);
+                    NetworkStream stream = client.tcp.GetStream();
+                    StreamWriter writer = new StreamWriter(stream);
+                    writer.WriteLine(jsonString); // Écriture de la chaîne JSON directement dans le flux
+                    writer.Flush();
+                }
+                catch (JsonException ex)
+                {
+                    Debug.WriteLine("Failed to serialize PaquetMessage. Error: " + ex.Message);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.WriteLine(e);
+        }
+    }
+
+
+    //pour envoyer a un seul client
+    public void Send(string data, ServerClient sc)
+    {
+        try
+        {
+            if (sc.tcp != null && IsConnected(sc.tcp))
+            {
+
+                PaquetMessage msg = new PaquetMessage(sc.ClientiD, 30000, new List<List<string>> { new List<string> { data } });
+                string jsonString = JsonSerializer.Serialize(msg);
+                NetworkStream stream = sc.tcp.GetStream();
+                StreamWriter writer = new StreamWriter(stream);
+                writer.WriteLine(jsonString); // Écriture de la chaîne JSON directement dans le flux
+                writer.Flush();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.WriteLine(e);
+        }
+    }
+
+    //pour recevoir les data du clients
+    private void OnIncomingData(ServerClient c, string data)
+    {
+        Console.WriteLine("message recu de IdClient " + "(" + c.ClientiD + ")" + " : " + data);
+    }
+
+    //pour traiter les data recu
+    public void handleData(string jsonData, List<ServerClient> clients, int i)
+    {
+        //gets the lobby index of the sender player
+        int lbIndex = lobbysList.FindIndex(lobby => lobby.ListPlayer.Any(player => player.ClientiD == clients[i].ClientiD));
+        //deserialize the data
+        PaquetMessage data = JsonSerializer.Deserialize<PaquetMessage>(jsonData); //data recu du client
+        //put the sender player's id in the received data
+        data.IdJoueur = clients[i].ClientiD;
+        int idJoueur = data.IdJoueur; //on récupère l'id du joueur
+        //handle the data
+
+        //id:
+        //90 will be for updating every player's game state
+        //91 will indicate that the included params are mission cards to be removed from the mission card list
+        //92 will indicate that the included params are wagon cards to be removed from the wagon card list
+
+        //ICI JE RAJOUTE L INDICE DU JOUEUR // MUSAB
+        int indiceJoueurSelectionne = data.IdJoueur; //c'est quoi ce bordel c'est pa l'indice 
+        Joueur joueurSelectionne = listeJoueurs[indiceJoueurSelectionne];
+        CarteMission[] lesCartesMissions = [];
+
+        switch (data.IdAction)
+        {
+            case 0: //player wants to host a game
+
+                //check if the player is already in a lobby
+                bool ExistingPlayer = (lobbysList != null) && lobbysList.Any(lobby => lobby.ListPlayer.Any(player => player.ClientiD == clients[i].ClientiD));
+                if (!ExistingPlayer)
+                {
+                    string codePourTester = Methodes.GenerateRandomCode();
+                    //pour l'instant juste pour piocher un code dans la liste 
+                    Lobby lb = new Lobby(IdLobby, codePourTester, clients[i]);
+                    lobbysList.Add(lb);
+                    lobbysList[IndexList].createLobby();
+
+                    //creation du joueur
+                    Joueur joueur = new Joueur("anonyme", clients[i].ClientiD, 0, pileManager); //couleur a modifier
+                    jeuUn.AjouterJoueur(joueur);
+
+                    creation et envoie des cartes wagons du joueur
+                    List<List<string>> wagons = new List<List<string>>();
+                    for (int j = 0; j < 5; j++)
+                    {
+                        wagons.Add(transformationTabString(pileManager.SurTable[j]));
+                    }
+
+                    PaquetMessage wagonsEnvoyer = new PaquetMessage(clients[i].ClientiD, 20050, wagons);
+                    Unicast(wagonsEnvoyer, clients[i]);
+
+                    //creation et envoie carte mission
+                    List<List<string>> cartesmissions = new List<List<string>>();
+                    CarteMission[] cartes = pileManager.piocherCarteMission();
+                    for (int z = 0; z < cartes.Length; z++)
+                    {
+                        cartesmissions.Add(transformationTabString(cartes[z]));
+                    }
+
+                    PaquetMessage cartesmissionsenvoyer = new PaquetMessage(clients[i].ClientiD, 20060, cartesmissions);
+                    Unicast(cartesmissionsenvoyer, clients[i]);
+
+
+                    IndexList++;
+                    IdLobby++;
+                    PaquetMessage MdpDuLobby = new PaquetMessage(clients[i].ClientiD, 0, new List<List<string>> {new List<string> { codePourTester }});
+                    Unicast(MdpDuLobby, clients[i]); // On envoie le mdp du lobby au client qui a host la game.
+                }
+                else
+                {
+                    Send("vous etes deja dans un lobby existant", clients[i]);
+                }
+                break;
+
+            case 1: //player wants to join a game 
+                //check if the player is already in a lobby
+                bool ExistingPlayerJoin = (lobbysList != null) && lobbysList.Any(lobby => lobby.ListPlayer.Any(player => player.ClientiD == clients[i].ClientiD));
+                if (!ExistingPlayerJoin)
+                {
+                    if (lobbysList != null && lobbysList.Any(lobby => lobby.codeLobby == data.Parametres[0][0]))
+                    {
+                        int lobbyIndex = lobbysList.FindIndex(lobby => lobby.codeLobby == data.Parametres[0][0]);
+                        if (lobbysList[lobbyIndex].nbrPlayerInLobby < 4)
+                        {
+                            lobbysList[lobbyIndex].joinLobby(data, clients[i]);
+                        }
+                        else
+                        {
+                            Send("nombre de joueur max atteint", clients[i]);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("le lobby n'existe pas");
+                    }
+                }
+                else
+                {
+                    Send("vous etes deja dans un lobby existant", clients[i]);
+                }
+                break;
+
+            case 2: //player asks for mission cards 
+                //server sends three missoin cards to the player
+                //unicast paquetMessage to the player with the 3 mission cards
+                //algo gets the ids (1 2 3 for now)
+                PaquetMessage dataMission = new PaquetMessage(data.IdJoueur, 2, new List<List<string>> { new List<string> { "1" }, new List<string> { "2" }, new List<string> { "3" } });
+                Unicast(dataMission, clients[i]);
+                //fonction sendCardsToPlayer
+                break;
+
+            case 3: //player choses at least two or all three mission cards (paquetMessage received has the IDs of the chosen cards)
+                //rebuild dataMission with chosen IDs received by player and send it to the same player
+                //server sends the chosen mission cards to the player
+                //unicast paquetMessage to the player with the chosen mission cards
+                //algo gets the ids (1 2 3 for now)
+                Unicast(data, clients[i]);
+
+                //no need to update misson pile for everyone, only update on server
+                // data.IdAction = 91;
+                // Broadcast(data, lobbysList[lbIndex].ListPlayer);
+                break;
+
+            case 4: //player wants to draw a wagon card from the pile
+                Broadcast(data, lobbysList[lbIndex].ListPlayer);
+                break;
+
+            case 5: //player chooses two of the 5 visible wagon cards
+                Broadcast(data, lobbysList[lbIndex].ListPlayer); //broadcast the action to all players
+                //should send the chosen cards to the player ? 
+                break;
+
+            case 6: //player asks to take a route
+                //server(algo) checks if player can take that road
+                Broadcast(data, lobbysList[lbIndex].ListPlayer);
+                break;
+
+            case 7: // 
+                break;
+
+            // PIOCHER CARTE WAGON SUR LA PILE
+            case 10005:
+                Console.WriteLine("j'ai recu une demande de carte wagon de la pioche du client:" + data.IdJoueur);
+                CarteWagon laCarteWagonDemandee;
+                laCarteWagonDemandee = jeuUn.DemandePileWagon(joueurSelectionne);
+                int idCarteRecu = laCarteWagonDemandee.Identifiant;
+                string idCarteenString = idCarteRecu.ToString();
+                PaquetMessage dataWagonRecu = new PaquetMessage(data.IdJoueur, 20005, new List<List<string>> { new List<string> { idCarteenString } });
+
+                foreach (CarteWagon carte in joueurSelectionne.Wagons)
+                {
+                    Console.WriteLine(carte.ToString());
+                }
+                Unicast(dataWagonRecu, clients[i]);
+
+                break;
+
+            // CHOISIR CARTE WAGON SUR LE COTE
+            case 10010:
+                Console.WriteLine("j'ai recu une demande de carte wagon de la table, du client:" + data.IdJoueur);
+                CarteWagon laCarteWagonChoisiDuPlateau;
+                string idCarteWagonChoisieEnString;
+
+                idCarteWagonChoisieEnString = data.Parametres[0][0];
+
+                int idCarteWagonChoisie = int.Parse(idCarteWagonChoisieEnString);
+
+                laCarteWagonChoisiDuPlateau = jeuUn.DemandeTableWagon(joueurSelectionne, idCarteWagonChoisie);
+                joueurSelectionne = listeJoueurs[indiceJoueurSelectionne];
+
+                string idCarteWagonChoisieEnString2 = idCarteWagonChoisie.ToString();
+
+                foreach (CarteWagon carte in joueurSelectionne.Wagons)
+                {
+                    Console.WriteLine(carte.ToString());
+                }
+
+                PaquetMessage dataWagonPlateau = new PaquetMessage(data.IdJoueur, 20010, new List<List<string>> { new List<string> { idCarteWagonChoisieEnString2 } });
+
+                Unicast(dataWagonPlateau, clients[i]);
+
+                break;
+
+
+
+
+            // DEMANDE DE CARTES MISSIONS: le joueur demande à piocher les 3 cartes missions
+            case 10020:
+                Console.WriteLine("demande de pioche et d'affichage de cartes missions du joueur:" + data.IdJoueur);
+                lesCartesMissions = jeuUn.DemandeMissions(joueurSelectionne);
+
+                //joueurSelectionne = listeJoueurs[indiceJoueurSelectionne];
+
+                foreach (var carteMission in lesCartesMissions)
+                {
+                    Console.WriteLine(carteMission.ToString());
+                }
+
+
+                string missionsEnString = string.Join(", ", lesCartesMissions.Select(carte => carte.ToString()));
+
+
+
+                PaquetMessage lesMissions = new PaquetMessage(data.IdJoueur, 20020, new List<List<string>> { new List<string> { missionsEnString } });
+
+                Unicast(lesMissions, clients[i]);
+                break;
+
+
+
+
+            //ICI LE JOUEUR CHOISIES SES CARTES PARMIS LES 3 CARTES PROPOSEES
+            case 10025:
+                Console.WriteLine("le client:" + data.IdJoueur + "est entrain de choisir ses cartes...");
+                //List<CarteMission> listeDesChoix;
+                bool[] lesChoixDuJoueur = [true, false, true]; //choix des joueurs
+                //listeDesChoix = EnsembleChoix(lesCartesMissions, lesChoixDuJoueur);
+                if (lesCartesMissions.Length < 3)
+                {
+                    throw new Exception("Le joueur choisit des cartes missions sans en avoir recues !");
+                }
+                (List<CarteMission>, List<CarteMission>) res = jeuUn.EnsembleChoix(lesCartesMissions, lesChoixDuJoueur);
+
+
+                break;
+
+
+            //CHOISIR LES CARTES MISSIONS
+            case 10030: //choisir carte mission
+                //le server reçoi une demande de cartes missions du client, il lui affiche donc 3 carte missions pour qu'il puisse aprés en choisir une
+                Console.WriteLine("j'ai recu une demande de carte mission du client:" + data.IdJoueur);
+
+                //le server verifie combien de carte mission le joueur a choisi (combien d'items dans le 1er parametre du paquet) puis renvoi que les cartes qui figurent dans la liste
+                //la listes des cartes choisies est dans l'attribut parametres du paquet
+                List<CarteMission> listeCarteMissionChoisie = new List<CarteMission>();
+                foreach (string idCarte in data.Parametres[0])
+                {
+                    int idCarteMission = int.Parse(idCarte);
+                    foreach (CarteMission carte in joueurSelectionne.Missions)
+                    {
+                        if (carte.Identifiant == idCarteMission)
+                        {
+                            listeCarteMissionChoisie.Add(carte);
+                        }
+                    }
+                }
+                //debug
+                foreach (CarteMission carte in listeCarteMissionChoisie)
+                {
+                    Console.WriteLine(carte.ToString());
+                }
+                //send the three mission cards to the player
+                PaquetMessage dataMissionChoisie = new PaquetMessage(data.IdJoueur, 20030, new List<List<string>> { new List<string> { listeCarteMissionChoisie[0].Identifiant.ToString() }, new List<string> { listeCarteMissionChoisie[1].Identifiant.ToString() }, new List<string> { listeCarteMissionChoisie[2].Identifiant.ToString() } });
+                Unicast(dataMissionChoisie, clients[i]);
+
+                break;
+
+
+            // AJOUTER ROUTE
+            case 10040:
+                string idDelaRouteEnString;
+                idDelaRouteEnString = data.Parametres[0][0];
+                int idDelaRouteEnId;
+                idDelaRouteEnId = int.Parse(idDelaRouteEnString);
+
+                jeuUn.DemandeAjoutDeRoute(joueurSelectionne, idDelaRouteEnId);
+
+
+                //ici on annonce à tout le monde la route que le joueur a choisi. data contient déjà l'id de la route et du l'id du joueur qui a fait l'action
+                data.IdAction = 20040;
+                Broadcast(data, lobbysList[lbIndex].ListPlayer);
+
+                break;
+
+
+
+        }
+
+
+    }
+
+    //fonction d'envoi d'un message d'erreur a un client (apres les verifs des actions)
+    public void SendError(string message, ServerClient sc)
+    {
+        PaquetMessage data = new PaquetMessage(0, 0, new List<List<string>> { new List<string> { message } });
+        Unicast(data, sc);
+    }
+
+    public static List<string> transformationTabString(object input)
+    {
+        List<string> result = new List<string>();
+
+        // Récupérer les propriétés de l'objet
+        PropertyInfo[] properties = input.GetType().GetProperties();
+
+        // Pour chaque propriété, ajouter son nom et sa valeur à la liste de chaînes
+        foreach (PropertyInfo property in properties)
+        {
+            string propertyName = property.Name;
+            object propertyValue = property.GetValue(input, null); // Obtient la valeur de la propriété
+
+            // Convertir la valeur en chaîne de caractères
+            string valueAsString = (propertyValue != null) ? propertyValue.ToString() : "null";
+
+            // Ajouter le nom de la propriété et sa valeur à la liste de résultats
+            result.Add($"{propertyName}: {valueAsString}");
+        }
+
+        return result;
+    }
+
+}
+
+//la definition du client qu'il recoit
+public class ServerClient
+{
+    public int ClientiD = 0;
+    //socket TCP
+    public TcpClient tcp;
+
+    public ServerClient(TcpClient tcp, int id)
+    {
+        this.tcp = tcp;
+        this.ClientiD = id;
+    }
+}

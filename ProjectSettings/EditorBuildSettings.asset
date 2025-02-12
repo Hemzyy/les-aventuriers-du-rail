@@ -1,0 +1,38 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1045 &1
+EditorBuildSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Scenes:
+  - enabled: 0
+    path: Assets/Scenes/SampleScene.unity
+    guid: 2cda990e2423bbf4892e6590ba056729
+  - enabled: 1
+    path: Assets/Scenes/MainMenu.unity
+    guid: c53d41decc2c2164ab5085c54d5a10c5
+  - enabled: 1
+    path: Assets/Scenes/InscriptionForm.unity
+    guid: d729a38dd5dd00e4098046f2b0c4bdcd
+  - enabled: 1
+    path: Assets/Scenes/ConnectForm.unity
+    guid: 4899d97e120c5e24799ccc4c30fa70da
+  - enabled: 1
+    path: Assets/Scenes/Account.unity
+    guid: 9768168a4b385a14cbfa1081970676ba
+  - enabled: 1
+    path: Assets/Scenes/Game.unity
+    guid: f3b6d01c898ff8543b448ac332813f23
+  - enabled: 1
+    path: Assets/Scenes/LoadingScreen.unity
+    guid: 7bed08c591799004d89bef0cf471c299
+  - enabled: 1
+    path: Assets/Scenes/Options.unity
+    guid: 543eef55d6f78f942b1a8024c50340f3
+  - enabled: 1
+    path: Assets/Scenes/PartyForm.unity
+    guid: 843fa94246393154385094e688737d1d
+  - enabled: 1
+    path: Assets/Scenes/ScoreScreen.unity
+    guid: 19c69dbb82e8189b1ab6858a14af73c7
+  m_configObjects: {}
