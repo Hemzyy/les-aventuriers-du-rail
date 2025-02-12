@@ -35,3 +35,5 @@ Le projet a été réalisé en **collaboration avec une équipe de 10 personnes*
 - **Développement Unity** : Interface utilisateur et implémentation des mécaniques du jeu.  
 - **Tests et débogage** : Identification et correction des bugs pour assurer une expérience fluide.  
 
+![Flyer1](/assets/Flyer_1.png)
+![Flyer2](/assets/Flyer_2.png)
